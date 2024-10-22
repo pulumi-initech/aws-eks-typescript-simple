@@ -171,8 +171,8 @@ values:
           stack: ${stackName}
   pulumiConfig:
     kubeConfig: \${stackRef.eks.kubeconfig}
-    cluserOidcProvider: \${stackRef.eks.cluserOidcProvider}
-    clusterOidcPrivderArn: \${stackRef.eks.clusterOidcPrivderArn}
+    clutserOidcProvider: \${stackRef.eks.clusterOidcProvider}
+    clusterOidcProviderArn: \${stackRef.eks.clusterOidcProviderArn}
     clusterSecretStoreRef: \${stackRef.eks.clusterSecretStoreRef}
   files:
     KUBECONFIG: \${stackRef.eks.kubeconfig}`),
