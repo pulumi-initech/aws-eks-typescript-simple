@@ -1,0 +1,17 @@
+[tool.poetry]
+name = "aws-load-balancer-controller"
+version = "0.1.0"
+description = ""
+authors = ["James Connell <jconnellpulumi.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pulumi = ">=3.0.0,<4.0.0"
+pulumi-aws = ">=6.0.2,<7.0.0"
+pulumi-kubernetes = "^4.5.4"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
