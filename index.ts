@@ -3,7 +3,6 @@ import * as eks from "@pulumi/eks";
 import * as aws from "@pulumi/aws";
 import * as k8s from "@pulumi/kubernetes";
 import * as pulumiservice from "@pulumi/pulumiservice";
-import { StackSettings } from "@pulumi-initech/stack-management";
 
 const config = new pulumi.Config();
 
