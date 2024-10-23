@@ -3,6 +3,7 @@ import * as eks from "@pulumi/eks";
 import * as aws from "@pulumi/aws";
 import * as k8s from "@pulumi/kubernetes";
 import * as pulumiservice from "@pulumi/pulumiservice";
+import { StackSettings } from "@pulumi-initech/stack-management";
 
 const config = new pulumi.Config();
 
@@ -147,34 +148,34 @@ export const clusterName = cluster.eksCluster.name;
 export const clusterSecretStoreRef = { kind: crd.kind, metadata: { name: crd.metadata.name, namespace: crd.metadata.namespace }};
 
 
-// new StackSettings("settings", {
-//   driftManagement: "",
-//   "stackOutputs": [
-//     "kubeconfig",
-//     "clusterOidcProvider",
-//     "clusterOidcProviderArn",
-//     "clusterSecretStoreRef"
-//   ]
-// });
-
-// ESC environment to advertise outputs
-const esc = new pulumiservice.Environment("stack-env", {
-  name: `${stack}-outputs`,
-  project: project,
-  organization: organization,
-  yaml: new pulumi.asset.StringAsset(`
-values:
-  stackRef:
-    fn::open::pulumi-stacks:
-      stacks:
-        eks:
-          stack: ${stackName}
-  pulumiConfig:
-    kubeConfig: \${stackRef.eks.kubeconfig}
-    clutserOidcProvider: \${stackRef.eks.clusterOidcProvider}
-    clusterOidcProviderArn: \${stackRef.eks.clusterOidcProviderArn}
-    clusterSecretStoreRef: \${stackRef.eks.clusterSecretStoreRef}
-  files:
-    KUBECONFIG: \${stackRef.eks.kubeconfig}`),
-  
+new StackSettings("settings", {
+  driftManagement: "",
+  stackOutputs: [
+    "kubeconfig",
+    "clusterOidcProvider",
+    "clusterOidcProviderArn",
+    "clusterSecretStoreRef"
+  ]
 });
+
+// // ESC environment to advertise outputs
+// const esc = new pulumiservice.Environment("stack-env", {
+//   name: `${stack}-outputs`,
+//   project: project,
+//   organization: organization,
+//   yaml: new pulumi.asset.StringAsset(`
+// values:
+//   stackRef:
+//     fn::open::pulumi-stacks:
+//       stacks:
+//         eks:
+//           stack: ${stackName}
+//   pulumiConfig:
+//     kubeConfig: \${stackRef.eks.kubeconfig}
+//     clutserOidcProvider: \${stackRef.eks.clusterOidcProvider}
+//     clusterOidcProviderArn: \${stackRef.eks.clusterOidcProviderArn}
+//     clusterSecretStoreRef: \${stackRef.eks.clusterSecretStoreRef}
+//   files:
+//     KUBECONFIG: \${stackRef.eks.kubeconfig}`),
+  
+// });
