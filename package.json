@@ -5,7 +5,7 @@
         "preinstall": "sed -e \"s/\\${GITHUB_TOKEN}/$GITHUB_TOKEN/\" .npmrc.envsubst > .npmrc"
     },
     "dependencies": {
-        "@pulumi-initech/stack-management": "^0.0.1",
+        "@pulumi-initech/stack-management": "^0.0.24",
         "@pulumi/aws": "^5.0.0",
         "@pulumi/awsx": "^1.0.0",
         "@pulumi/eks": "^2.0.0",

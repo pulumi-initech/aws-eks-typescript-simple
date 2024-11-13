@@ -1,2 +1,2 @@
 environment:
-  - demo/aws-eks-dev
+  - aws-eks-typescript-simple/dev
