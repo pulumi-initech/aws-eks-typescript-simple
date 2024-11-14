@@ -1,2 +1,2 @@
 environment:
-  - demo/aws-eks-prod
+  - aws-eks-typescript-simple/prod
