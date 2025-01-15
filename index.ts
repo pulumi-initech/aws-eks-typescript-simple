@@ -144,6 +144,7 @@ const stackName = `${project}/${stack}`;
 export const kubeconfig = cluster.kubeconfigJson;
 export const clusterOidcProvider = cluster.core.oidcProvider?.url;
 export const clusterOidcProviderArn = cluster.core.oidcProvider?.arn;
+export const clusterIdentifier = cluster.eksCluster.id;
 export const clusterName = cluster.eksCluster.name;
 export const clusterSecretStoreRef = { kind: crd.kind, metadata: { name: crd.metadata.name, namespace: crd.metadata.namespace }};
 
@@ -151,6 +152,8 @@ export const clusterSecretStoreRef = { kind: crd.kind, metadata: { name: crd.met
 const settings = new StackSettings("settings", {
   stackOutputs: [
     "kubeconfig",
+    "clusterName",
+    "clusterIdentifier",
     "clusterOidcProvider",
     "clusterOidcProviderArn",
     "clusterSecretStoreRef"
