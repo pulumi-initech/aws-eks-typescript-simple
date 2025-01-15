@@ -1,2 +1,7 @@
 environment:
   - aws-eks-typescript-simple/dev
+  - shared/aws-dev
+config:
+  usePrometheus: true
+  usePKO: true
+  useFlux: true

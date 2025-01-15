@@ -13,6 +13,7 @@ const privateSubnetIds = config.requireObject<string[]>("PrivateSubnetIds");
 const useFargate = config.getBoolean("useFargate") ?? false;
 const secretStoreEnvironment = config.require("secretStoreEnvironment");
 const externalSecretsVersion = config.get("externalSecretsVersion") ?? "0.10.4";
+const pkoVersion = config.get("pkoVersion") ?? "v2.0.0-beta.3"
 
 const clusterOptions: eks.ClusterOptions = {
   vpcId: vpcId,
@@ -20,6 +21,7 @@ const clusterOptions: eks.ClusterOptions = {
   publicSubnetIds: publicSubnetIds,
   createOidcProvider: true,
   fargate: useFargate,
+  instanceType: "m3.medium",
   tags: {
     Owner: "jconnell@pulumi.com",
   },
@@ -86,6 +88,56 @@ const ns = new k8s.core.v1.Namespace(
   { provider: kubeProvider, dependsOn: [cluster] }
 );
 
+if (config.getBoolean("usePrometheus")) {
+  const promOperator = new k8s.helm.v3.Release("prom-operator", {
+    name: "kube-prometheus-stack",
+    chart: "kube-prometheus-stack",
+    repositoryOpts: {
+        repo: "https://prometheus-community.github.io/helm-charts",
+    },
+    values: {
+        prometheus: {
+            prometheusSpec: {
+                serviceMonitorSelectorNilUsesHelmValues: false,
+            },
+        },
+    },
+});
+}
+
+if (config.getBoolean("useFlux")) {
+  const fluxns = new k8s.core.v1.Namespace("pulumi-kubernetes-operator",
+    { metadata: { name: "pulumi-kubernetes-operator" } },
+    { provider: kubeProvider, dependsOn: [cluster] }
+  );
+
+  const flux = new k8s.helm.v4.Chart("flux", 
+    {
+      namespace: fluxns.metadata.name,
+      chart: "oci://ghcr.io/fluxcd-community/charts/flux2" 
+    }, 
+    { provider: kubeProvider, dependsOn: [cluster, fluxns]}
+  );
+}
+
+if (config.getBoolean("usePKO")) {
+
+  const pkons = new k8s.core.v1.Namespace("flux-system",
+    { metadata: { name: "flux-system" } },
+    { provider: kubeProvider, dependsOn: [cluster] }
+  );
+
+  const pko = new k8s.kustomize.Directory("pulumi-kubernetes-operator", {
+     directory: `https://github.com/pulumi/pulumi-kubernetes-operator//operator/config/default/?ref=${pkoVersion}`
+  }, { provider: kubeProvider});
+
+  // const pko = new k8s.helm.v4.Chart("pulumi-kubernetes-operator", {
+  //   namespace: pkons.metadata.name,
+  //   chart: "oci://ghcr.io/pulumi/helm-charts/pulumi-kubernetes-operator",
+  //   version: "2.0.0-beta.3"
+  // }, { provider: kubeProvider});
+}
+
 // // Deploy a Helm release into the namespace
 const externalSecrets = new k8s.helm.v4.Chart("external-secrets", {
     chart: "external-secrets",
@@ -136,13 +188,9 @@ const crd = new k8s.apiextensions.CustomResource("cluster-secret-store", {
     },
 }, { provider: kubeProvider, dependsOn: [externalSecrets, cluster] });
 
-const organization = pulumi.getOrganization();
-const project = pulumi.getProject()
-const stack = pulumi.getStack()
-const stackName = `${project}/${stack}`;
-
 export const kubeconfig = cluster.kubeconfigJson;
 export const clusterOidcProvider = cluster.core.oidcProvider?.url;
 export const clusterOidcProviderArn = cluster.core.oidcProvider?.arn;
+export const clusterIdentifier = cluster.eksCluster.id;
 export const clusterName = cluster.eksCluster.name;
 export const clusterSecretStoreRef = { kind: crd.kind, metadata: { name: crd.metadata.name, namespace: crd.metadata.namespace }};
