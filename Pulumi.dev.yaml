@@ -2,6 +2,8 @@ environment:
   - aws-eks-typescript-simple/dev
   - shared/aws-dev
 config:
-  usePrometheus: true
-  usePKO: true
-  useFlux: true
+  aws-eks-typescript-simple:usePrometheus: "false"
+  aws-eks-typescript-simple:usePKO: "true"
+  aws-eks-typescript-simple:useFlux: "false"
+  aws-eks-typescript-simple:useArgoCD: "false"
+  aws:region: us-east-1
