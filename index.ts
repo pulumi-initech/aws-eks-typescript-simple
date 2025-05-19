@@ -72,6 +72,7 @@ if (useFargate) {
 }
 
 const kubeProvider = new k8s.Provider("kube", {
+  clusterIdentifier: cluster.eksCluster.name,
   kubeconfig: cluster.kubeconfig,
 });
 
