@@ -2,7 +2,6 @@ import * as pulumi from "@pulumi/pulumi";
 import * as eks from "@pulumi/eks";
 import * as aws from "@pulumi/aws";
 import * as k8s from "@pulumi/kubernetes";
-import * as pulumiservice from "@pulumi/pulumiservice";
 
 const config = new pulumi.Config();
 
@@ -28,6 +27,10 @@ const clusterOptions: eks.ClusterOptions = {
   createOidcProvider: true,
   fargate: useFargate,
   corednsAddonOptions: { enabled: true }, 
+  autoMode: {
+    enabled: true,
+    createNodeRole: true,
+  },
   maxSize: 6,
   desiredCapacity: 4,
   minSize: 4,
@@ -122,7 +125,7 @@ if (config.getBoolean("usePrometheus")) {
         },
       },
     },
-  });
+  }, { provider: kubeProvider });
 }
 
 if (config.getBoolean("useFlux")) {
@@ -195,7 +198,7 @@ if (config.getBoolean("useArgoCD")) {
         },
       },
     },
-  });
+  }, { provider: kubeProvider, dependsOn: [argocd] });
 }
 
 if (config.getBoolean("usePKO")) {
@@ -283,22 +286,4 @@ export const clusterOidcProvider = cluster.core.oidcProvider?.url;
 export const clusterOidcProviderArn = cluster.core.oidcProvider?.arn;
 export const clusterIdentifier = cluster.eksCluster.id;
 export const clusterName = cluster.eksCluster.name;
-<<<<<<< HEAD
 export const clusterSecretStoreRef = { kind: crd.kind, metadata: { name: crd.metadata.name, namespace: crd.metadata.namespace }};
-=======
-export const clusterSecretStoreRef = {
-  kind: crd.kind,
-  metadata: { name: crd.metadata.name, namespace: crd.metadata.namespace },
-};
-
-const settings = new StackSettings("settings", {
-  stackOutputs: [
-    "kubeconfig",
-    "clusterName",
-    "clusterIdentifier",
-    "clusterOidcProvider",
-    "clusterOidcProviderArn",
-    "clusterSecretStoreRef",
-  ],
-});
->>>>>>> b465a18 (Updates)
