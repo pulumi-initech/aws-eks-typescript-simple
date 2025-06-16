@@ -3,7 +3,6 @@ import * as eks from "@pulumi/eks";
 import * as aws from "@pulumi/aws";
 import * as k8s from "@pulumi/kubernetes";
 import * as pulumiservice from "@pulumi/pulumiservice";
-import { StackSettings } from "@pulumi-initech/stack-management";
 
 const config = new pulumi.Config();
 
@@ -147,13 +146,3 @@ export const clusterOidcProvider = cluster.core.oidcProvider?.url;
 export const clusterOidcProviderArn = cluster.core.oidcProvider?.arn;
 export const clusterName = cluster.eksCluster.name;
 export const clusterSecretStoreRef = { kind: crd.kind, metadata: { name: crd.metadata.name, namespace: crd.metadata.namespace }};
-
-
-const settings = new StackSettings("settings", {
-  stackOutputs: [
-    "kubeconfig",
-    "clusterOidcProvider",
-    "clusterOidcProviderArn",
-    "clusterSecretStoreRef"
-  ]
-});
