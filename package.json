@@ -2,7 +2,6 @@
     "name": "workshop-cluster",
     "main": "index.ts",
     "scripts": {
-        "preinstall": "sed -e \"s/\\${GITHUB_TOKEN}/$GITHUB_TOKEN/\" .npmrc.envsubst > .npmrc"
     },
     "dependencies": {
         "@pulumi/aws": "^5.43.0",
