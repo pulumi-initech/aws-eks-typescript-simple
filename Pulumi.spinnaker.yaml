@@ -1,0 +1,12 @@
+environment:
+  - aws-eks-typescript-simple/dev
+  - shared/aws-dev
+  - shared/aws-dev
+config:
+  aws-eks-typescript-simple:clusterName: spin-demo
+  aws-eks-typescript-simple:clusterVersion: "1.25"
+  aws-eks-typescript-simple:usePrometheus: false
+  aws-eks-typescript-simple:usePKO: true
+  aws-eks-typescript-simple:useFlux: false
+  aws-eks-typescript-simple:useArgoCD: false
+  aws:region: us-west-2

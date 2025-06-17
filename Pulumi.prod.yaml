@@ -1,2 +1,8 @@
 environment:
   - aws-eks-typescript-simple/prod
+config:
+  usePrometheus: "false"
+  usePKO: "true"
+  useFlux: "true"
+  useArgoCD: "true"
+  aws:region: us-west-2
