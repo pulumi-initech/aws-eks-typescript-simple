@@ -10,6 +10,7 @@ const vpcId = config.require("VpcId");
 
 const awsConfig = new pulumi.Config("aws");
 const region = awsConfig.require("region");
+const accountId = aws.getCallerIdentity().then(identity => identity.accountId);
 
 const publicSubnetIds = config.requireObject<string[]>("PublicSubnetIds");
 const privateSubnetIds = config.requireObject<string[]>("PrivateSubnetIds");
@@ -35,16 +36,102 @@ const clusterOptions: eks.ClusterOptions = {
   desiredCapacity: 4,
   minSize: 4,
   authenticationMode: "API_AND_CONFIG_MAP",
-  instanceType: "m3.medium",
+  instanceType: "t3.large", // Upgraded from deprecated m3.medium
+  // Security enhancements
+  encryptionConfigKeyArn: config.get("kmsKeyArn"), // Enable cluster encryption
+  endpointPrivateAccess: true,
+  endpointPublicAccess: config.getBoolean("allowPublicAccess") ?? false, // Restrict public access
+  publicAccessCidrs: config.getObject<string[]>("publicAccessCidrs") ?? ["10.0.0.0/8"], // Limit public access
+  // Node security
+  nodeRootVolumeEncrypted: true, // Encrypt node root volumes
+  nodeRootVolumeSize: 50, // Increase root volume size for better performance
   tags: {
     Owner: "jconnell@pulumi.com",
+    Environment: "production",
+    "kubernetes.io/cluster-autoscaler/enabled": "true",
+    "kubernetes.io/cluster-autoscaler/jconnell-eks-demo": "owned",
   },
 };
 
 if (!useFargate) {
-  clusterOptions.instanceType = config.require("instanceType");
+  clusterOptions.instanceType = config.get("instanceType") ?? "t3.large";
 }
 const cluster = new eks.Cluster(name, clusterOptions);
+
+// Add additional managed node groups for better availability and scaling
+if (!useFargate) {
+  // Create a spot instance node group for cost optimization
+  const spotNodeGroup = new aws.eks.NodeGroup("spot-nodes", {
+    clusterName: cluster.eksCluster.name,
+    nodeGroupName: `${name}-spot-nodes`,
+    nodeRoleArn: pulumi.all([accountId, cluster.instanceRoles[0]]).apply(([accId, role]) => `arn:aws:iam::${accId}:role/${role}`),
+    subnetIds: privateSubnetIds,
+    capacityType: "SPOT",
+    instanceTypes: ["t3.large", "t3.xlarge", "m5.large", "m5.xlarge"],
+    scalingConfig: {
+      desiredSize: 2,
+      maxSize: 10,
+      minSize: 0,
+    },
+    updateConfig: {
+      maxUnavailablePercentage: 25,
+    },
+    diskSize: 50,
+    amiType: "AL2_x86_64",
+    labels: {
+      "node-type": "spot",
+      "workload": "general",
+    },
+    taints: [
+      {
+        key: "spot-instance",
+        value: "true",
+        effect: "NO_SCHEDULE",
+      },
+    ],
+    tags: {
+      "kubernetes.io/cluster-autoscaler/enabled": "true",
+      "kubernetes.io/cluster-autoscaler/node-template/label/node-type": "spot",
+      [`kubernetes.io/cluster-autoscaler/${name}`]: "owned",
+    },
+  }, { dependsOn: [cluster] });
+
+  // Create a dedicated node group for system workloads
+  const systemNodeGroup = new aws.eks.NodeGroup("system-nodes", {
+    clusterName: cluster.eksCluster.name,
+    nodeGroupName: `${name}-system-nodes`,
+    nodeRoleArn: pulumi.all([accountId, cluster.instanceRoles[0]]).apply(([accId, role]) => `arn:aws:iam::${accId}:role/${role}`),
+    subnetIds: privateSubnetIds,
+    capacityType: "ON_DEMAND",
+    instanceTypes: ["t3.medium"],
+    scalingConfig: {
+      desiredSize: 2,
+      maxSize: 4,
+      minSize: 2,
+    },
+    updateConfig: {
+      maxUnavailablePercentage: 25,
+    },
+    diskSize: 50,
+    amiType: "AL2_x86_64",
+    labels: {
+      "node-type": "system",
+      "workload": "system",
+    },
+    taints: [
+      {
+        key: "CriticalAddonsOnly",
+        value: "true",
+        effect: "NO_SCHEDULE",
+      },
+    ],
+    tags: {
+      "kubernetes.io/cluster-autoscaler/enabled": "true",
+      "kubernetes.io/cluster-autoscaler/node-template/label/node-type": "system",
+      [`kubernetes.io/cluster-autoscaler/${name}`]: "owned",
+    },
+  }, { dependsOn: [cluster] });
+}
 
 if (useFargate) {
   const podExecutionRole = new aws.iam.Role("podExecutionRole", {
@@ -112,9 +199,21 @@ const ns = new k8s.core.v1.Namespace(
 );
 
 if (config.getBoolean("usePrometheus")) {
+  // Create monitoring namespace
+  const monitoringNs = new k8s.core.v1.Namespace(
+    "monitoring",
+    {
+      metadata: {
+        name: "monitoring",
+      },
+    },
+    { provider: kubeProvider, dependsOn: [cluster] }
+  );
+
   const promOperator = new k8s.helm.v3.Release("prom-operator", {
     name: "kube-prometheus-stack",
     chart: "kube-prometheus-stack",
+    namespace: monitoringNs.metadata.name,
     repositoryOpts: {
       repo: "https://prometheus-community.github.io/helm-charts",
     },
@@ -122,10 +221,79 @@ if (config.getBoolean("usePrometheus")) {
       prometheus: {
         prometheusSpec: {
           serviceMonitorSelectorNilUsesHelmValues: false,
+          retention: "30d", // Retain metrics for 30 days
+          storageSpec: {
+            volumeClaimTemplate: {
+              spec: {
+                storageClassName: "gp3",
+                accessModes: ["ReadWriteOnce"],
+                resources: {
+                  requests: {
+                    storage: "50Gi",
+                  },
+                },
+              },
+            },
+          },
+          resources: {
+            requests: {
+              memory: "2Gi",
+              cpu: "1000m",
+            },
+            limits: {
+              memory: "4Gi",
+              cpu: "2000m",
+            },
+          },
         },
       },
+      grafana: {
+        enabled: true,
+        persistence: {
+          enabled: true,
+          size: "10Gi",
+          storageClassName: "gp3",
+        },
+        adminPassword: config.requireSecret("grafanaAdminPassword"),
+        resources: {
+          requests: {
+            memory: "256Mi",
+            cpu: "100m",
+          },
+          limits: {
+            memory: "512Mi",
+            cpu: "200m",
+          },
+        },
+      },
+      alertmanager: {
+        enabled: true,
+        alertmanagerSpec: {
+          storage: {
+            volumeClaimTemplate: {
+              spec: {
+                storageClassName: "gp3",
+                accessModes: ["ReadWriteOnce"],
+                resources: {
+                  requests: {
+                    storage: "10Gi",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      // Enable node exporter for node metrics
+      nodeExporter: {
+        enabled: true,
+      },
+      // Enable kube-state-metrics
+      kubeStateMetrics: {
+        enabled: true,
+      },
     },
-  }, { provider: kubeProvider });
+  }, { provider: kubeProvider, dependsOn: [monitoringNs] });
 }
 
 if (config.getBoolean("useFlux")) {
@@ -223,7 +391,7 @@ if (config.getBoolean("usePKO")) {
   // }, { provider: kubeProvider});
 }
 
-// // Deploy a Helm release into the namespace
+// Deploy a Helm release into the namespace with proper replica counts for robustness
 const externalSecrets = new k8s.helm.v4.Chart(
   "external-secrets",
   {
@@ -232,6 +400,54 @@ const externalSecrets = new k8s.helm.v4.Chart(
     namespace: ns.metadata.name,
     repositoryOpts: {
       repo: "https://charts.external-secrets.io",
+    },
+    values: {
+      // Ensure minimum replica counts for high availability
+      replicaCount: 2,
+      webhook: {
+        replicaCount: 2,
+      },
+      certController: {
+        replicaCount: 2,
+      },
+      // Add resource limits and requests for stability
+      resources: {
+        limits: {
+          cpu: "200m",
+          memory: "256Mi",
+        },
+        requests: {
+          cpu: "100m",
+          memory: "128Mi",
+        },
+      },
+      // Enable pod disruption budgets
+      podDisruptionBudget: {
+        enabled: true,
+        minAvailable: 1,
+      },
+      // Add anti-affinity for better distribution
+      affinity: {
+        podAntiAffinity: {
+          preferredDuringSchedulingIgnoredDuringExecution: [
+            {
+              weight: 100,
+              podAffinityTerm: {
+                labelSelector: {
+                  matchExpressions: [
+                    {
+                      key: "app.kubernetes.io/name",
+                      operator: "In",
+                      values: ["external-secrets"],
+                    },
+                  ],
+                },
+                topologyKey: "kubernetes.io/hostname",
+              },
+            },
+          ],
+        },
+      },
     },
   },
   { provider: kubeProvider, dependsOn: [cluster] }
@@ -279,6 +495,360 @@ const crd = new k8s.apiextensions.CustomResource(
     },
   },
   { provider: kubeProvider, dependsOn: [externalSecrets, cluster] }
+);
+
+// Deploy Cluster Autoscaler for automatic node scaling
+if (!useFargate) {
+  // Create service account for cluster autoscaler
+  const clusterAutoscalerSA = new k8s.core.v1.ServiceAccount(
+    "cluster-autoscaler-sa",
+    {
+      metadata: {
+        name: "cluster-autoscaler",
+        namespace: "kube-system",
+      },
+    },
+    { provider: kubeProvider, dependsOn: [cluster] }
+  );
+
+  // Deploy cluster autoscaler
+  const clusterAutoscaler = new k8s.apps.v1.Deployment(
+    "cluster-autoscaler",
+    {
+      metadata: {
+        name: "cluster-autoscaler",
+        namespace: "kube-system",
+        labels: {
+          app: "cluster-autoscaler",
+        },
+      },
+      spec: {
+        replicas: 1,
+        selector: {
+          matchLabels: {
+            app: "cluster-autoscaler",
+          },
+        },
+        template: {
+          metadata: {
+            labels: {
+              app: "cluster-autoscaler",
+            },
+            annotations: {
+              "prometheus.io/scrape": "true",
+              "prometheus.io/port": "8085",
+            },
+          },
+          spec: {
+            serviceAccountName: clusterAutoscalerSA.metadata.name,
+            containers: [
+              {
+                image: "registry.k8s.io/autoscaling/cluster-autoscaler:v1.31.0",
+                name: "cluster-autoscaler",
+                resources: {
+                  limits: {
+                    cpu: "100m",
+                    memory: "600Mi",
+                  },
+                  requests: {
+                    cpu: "100m",
+                    memory: "600Mi",
+                  },
+                },
+                command: [
+                  "./cluster-autoscaler",
+                  "--v=4",
+                  "--stderrthreshold=info",
+                  "--cloud-provider=aws",
+                  `--node-group-auto-discovery=asg:tag=k8s.io/cluster-autoscaler/enabled,k8s.io/cluster-autoscaler/${name}`,
+                  "--logtostderr=true",
+                  "--scale-down-enabled=true",
+                  "--scale-down-delay-after-add=10m",
+                  "--scale-down-unneeded-time=10m",
+                  "--scale-down-utilization-threshold=0.5",
+                  "--skip-nodes-with-local-storage=false",
+                  "--expander=random",
+                ],
+                volumeMounts: [
+                  {
+                    name: "ssl-certs",
+                    mountPath: "/etc/ssl/certs/ca-certificates.crt",
+                    readOnly: true,
+                  },
+                ],
+                imagePullPolicy: "Always",
+              },
+            ],
+            volumes: [
+              {
+                name: "ssl-certs",
+                hostPath: {
+                  path: "/etc/ssl/certs/ca-bundle.crt",
+                },
+              },
+            ],
+          },
+        },
+      },
+    },
+    { provider: kubeProvider, dependsOn: [clusterAutoscalerSA, cluster] }
+  );
+}
+
+// Deploy Velero for backup and disaster recovery
+if (config.getBoolean("useVelero") ?? true) {
+  // Create Velero namespace
+  const veleroNs = new k8s.core.v1.Namespace(
+    "velero",
+    {
+      metadata: {
+        name: "velero",
+      },
+    },
+    { provider: kubeProvider, dependsOn: [cluster] }
+  );
+
+  // Deploy Velero using Helm
+  const velero = new k8s.helm.v3.Release("velero", {
+    name: "velero",
+    chart: "velero",
+    namespace: veleroNs.metadata.name,
+    repositoryOpts: {
+      repo: "https://vmware-tanzu.github.io/helm-charts",
+    },
+    values: {
+      configuration: {
+        backupStorageLocation: [
+          {
+            name: "default",
+            provider: "aws",
+            bucket: config.get("veleroBackupBucket") ?? `${name}-velero-backups`,
+            config: {
+              region: region,
+            },
+          },
+        ],
+        volumeSnapshotLocation: [
+          {
+            name: "default",
+            provider: "aws",
+            config: {
+              region: region,
+            },
+          },
+        ],
+      },
+      initContainers: [
+        {
+          name: "velero-plugin-for-aws",
+          image: "velero/velero-plugin-for-aws:v1.10.0",
+          imagePullPolicy: "IfNotPresent",
+          volumeMounts: [
+            {
+              mountPath: "/target",
+              name: "plugins",
+            },
+          ],
+        },
+      ],
+      serviceAccount: {
+        server: {
+          create: true,
+          annotations: {
+            "eks.amazonaws.com/role-arn": cluster.core.oidcProvider?.arn.apply(arn => 
+              `arn:aws:iam::${accountId}:role/velero-role`
+            ),
+          },
+        },
+      },
+      schedules: {
+        daily: {
+          disabled: false,
+          schedule: "0 2 * * *", // Daily at 2 AM
+          template: {
+            ttl: "720h", // 30 days retention
+            includedNamespaces: ["*"],
+            excludedNamespaces: ["kube-system", "kube-public", "kube-node-lease"],
+          },
+        },
+        weekly: {
+          disabled: false,
+          schedule: "0 3 * * 0", // Weekly on Sunday at 3 AM
+          template: {
+            ttl: "2160h", // 90 days retention
+            includedNamespaces: ["*"],
+            excludedNamespaces: ["kube-system", "kube-public", "kube-node-lease"],
+          },
+        },
+      },
+    },
+  }, { provider: kubeProvider, dependsOn: [veleroNs, cluster] });
+}
+
+// Deploy AWS Load Balancer Controller for better ingress management
+if (!useFargate) {
+  const awsLbControllerNs = new k8s.core.v1.Namespace(
+    "aws-load-balancer-controller",
+    {
+      metadata: {
+        name: "aws-load-balancer-controller",
+      },
+    },
+    { provider: kubeProvider, dependsOn: [cluster] }
+  );
+
+  const awsLbController = new k8s.helm.v3.Release("aws-load-balancer-controller", {
+    name: "aws-load-balancer-controller",
+    chart: "aws-load-balancer-controller",
+    namespace: awsLbControllerNs.metadata.name,
+    repositoryOpts: {
+      repo: "https://aws.github.io/eks-charts",
+    },
+    values: {
+      clusterName: cluster.eksCluster.name,
+      serviceAccount: {
+        create: true,
+        annotations: {
+          "eks.amazonaws.com/role-arn": cluster.core.oidcProvider?.arn.apply(arn => 
+            `arn:aws:iam::${accountId}:role/aws-load-balancer-controller-role`
+          ),
+        },
+      },
+      region: region,
+      vpcId: vpcId,
+      replicaCount: 2,
+      resources: {
+        limits: {
+          cpu: "200m",
+          memory: "500Mi",
+        },
+        requests: {
+          cpu: "100m",
+          memory: "200Mi",
+        },
+      },
+    },
+  }, { provider: kubeProvider, dependsOn: [awsLbControllerNs, cluster] });
+}
+
+// Deploy Calico for network policies (if not using Fargate)
+if (!useFargate && (config.getBoolean("useNetworkPolicies") ?? true)) {
+  const calico = new k8s.helm.v3.Release("calico", {
+    name: "calico",
+    chart: "tigera-operator",
+    namespace: "tigera-operator",
+    createNamespace: true,
+    repositoryOpts: {
+      repo: "https://docs.tigera.io/calico/charts",
+    },
+    values: {
+      installation: {
+        kubernetesProvider: "EKS",
+      },
+    },
+  }, { provider: kubeProvider, dependsOn: [cluster] });
+
+  // Create default network policies for enhanced security
+  const defaultDenyAll = new k8s.networking.v1.NetworkPolicy(
+    "default-deny-all",
+    {
+      metadata: {
+        name: "default-deny-all",
+        namespace: "default",
+      },
+      spec: {
+        podSelector: {},
+        policyTypes: ["Ingress", "Egress"],
+      },
+    },
+    { provider: kubeProvider, dependsOn: [calico] }
+  );
+
+  // Allow DNS resolution
+  const allowDns = new k8s.networking.v1.NetworkPolicy(
+    "allow-dns",
+    {
+      metadata: {
+        name: "allow-dns",
+        namespace: "default",
+      },
+      spec: {
+        podSelector: {},
+        policyTypes: ["Egress"],
+        egress: [
+          {
+            to: [
+              {
+                namespaceSelector: {
+                  matchLabels: {
+                    name: "kube-system",
+                  },
+                },
+              },
+            ],
+            ports: [
+              {
+                protocol: "UDP",
+                port: 53,
+              },
+              {
+                protocol: "TCP",
+                port: 53,
+              },
+            ],
+          },
+        ],
+      },
+    },
+    { provider: kubeProvider, dependsOn: [calico] }
+  );
+}
+
+// Create Pod Security Standards
+const podSecurityPolicy = new k8s.core.v1.Namespace(
+  "secure-namespace",
+  {
+    metadata: {
+      name: "secure-workloads",
+      labels: {
+        "pod-security.kubernetes.io/enforce": "restricted",
+        "pod-security.kubernetes.io/audit": "restricted",
+        "pod-security.kubernetes.io/warn": "restricted",
+      },
+    },
+  },
+  { provider: kubeProvider, dependsOn: [cluster] }
+);
+
+// Create a security context constraints for workloads
+const securityContextConstraints = new k8s.core.v1.LimitRange(
+  "security-limits",
+  {
+    metadata: {
+      name: "security-limits",
+      namespace: podSecurityPolicy.metadata.name,
+    },
+    spec: {
+      limits: [
+        {
+          type: "Container",
+          default: {
+            cpu: "100m",
+            memory: "128Mi",
+          },
+          defaultRequest: {
+            cpu: "50m",
+            memory: "64Mi",
+          },
+          max: {
+            cpu: "1000m",
+            memory: "1Gi",
+          },
+        },
+      ],
+    },
+  },
+  { provider: kubeProvider, dependsOn: [podSecurityPolicy] }
 );
 
 export const kubeconfig = cluster.kubeconfigJson;
