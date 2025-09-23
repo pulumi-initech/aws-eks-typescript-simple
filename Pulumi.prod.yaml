@@ -1,8 +1,20 @@
 environment:
   - aws-eks-typescript-simple/prod
 config:
-  usePrometheus: "false"
+  usePrometheus: "true"
   usePKO: "false"
   useFlux: "true"
   useArgoCD: "true"
   aws:region: us-west-2
+  # Security configurations
+  allowPublicAccess: "false"
+  publicAccessCidrs:
+    - "10.0.0.0/8"
+    - "172.16.0.0/12"
+    - "192.168.0.0/16"
+  # Instance configuration
+  instanceType: "t3.large"
+  # Additional robustness features
+  useVelero: "true"
+  useNetworkPolicies: "true"
+  veleroBackupBucket: "jconnell-eks-demo-velero-backups"
