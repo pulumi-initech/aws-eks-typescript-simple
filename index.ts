@@ -2,6 +2,7 @@ import * as pulumi from "@pulumi/pulumi";
 import * as eks from "@pulumi/eks";
 import * as aws from "@pulumi/aws";
 import * as k8s from "@pulumi/kubernetes";
+import * as random from "@pulumi/random";
 
 const config = new pulumi.Config();
 
@@ -148,10 +149,28 @@ if (config.getBoolean("useFlux")) {
 if (config.getBoolean("useArgoCD")) {
   const argoChartVersion = config.get("argoChartVersion") || "7.7.12";
 
+  const argocdns = new k8s.core.v1.Namespace(
+    "argocd",
+    { metadata: { name: "argocd" } },
+    { provider: kubeProvider, dependsOn: [cluster] }
+  );
+
+  const redisPasswordResource = new random.RandomPassword("redis-password", {length: 16});
+  const redisSecret = new k8s.core.v1.Secret("redis-secret", {
+      metadata: {
+          name: "argocd-redis",
+          namespace: argocdns.metadata.name,
+      },
+      type: "Opaque",
+      stringData: {
+          auth: redisPasswordResource.result,
+      },
+  }, { provider: kubeProvider, dependsOn: [argocdns] });
+
   const argocd = new k8s.helm.v4.Chart(
     "argocd",
     {
-      namespace: ns.metadata.name,
+      namespace: argocdns.metadata.name,
       chart: "argo-cd",
       repositoryOpts: {
         repo: "https://argoproj.github.io/argo-helm",
