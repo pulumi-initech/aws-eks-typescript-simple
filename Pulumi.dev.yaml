@@ -1,2 +1,10 @@
 environment:
   - aws-eks-typescript-simple/dev
+  - shared/aws-dev
+config:
+  usePrometheus: "false"
+  usePKO: "true"
+  useFlux: "true"
+  useArgoCD: "true"
+  clusterName: jconnell-dev
+  aws:region: us-west-2
