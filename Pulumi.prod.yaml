@@ -3,6 +3,6 @@ environment:
 config:
   usePrometheus: "false"
   usePKO: "false"
-  useFlux: "true"
-  useArgoCD: "true"
+  useFlux: "false"
+  useArgoCD: "false"
   aws:region: us-west-2

@@ -17,7 +17,7 @@ const privateSubnetIds = config.requireObject<string[]>("PrivateSubnetIds");
 const useFargate = config.getBoolean("useFargate") ?? false;
 const secretStoreEnvironment = config.require("secretStoreEnvironment");
 const externalSecretsVersion = config.get("externalSecretsVersion") ?? "0.10.4";
-const pkoVersion = config.get("pkoVersion") ?? "v2.0.0";
+const pkoVersion = config.get("pkoVersion") ?? "v2.2.0";
 const clusterVersion = config.get("clusterVersion") ?? "1.31";
 
 const clusterOptions: eks.ClusterOptions = {
@@ -198,19 +198,19 @@ if (config.getBoolean("useArgoCD")) {
     apiVersion: "argoproj.io/v1alpha1",
     kind: "Application",
     metadata: {
-      name: "my-argocd-application",
+      name: "pulumi-argocd-apps",
       namespace: "argocd",
     },
     spec: {
       project: "default",
       source: {
-        repoURL: "https://github.com/your-repo/your-app.git",
+        repoURL: "https://github.com/pulumi-initech/pulumi-argocd-apps.git",
         targetRevision: "HEAD",
-        path: "path/to/your/app",
+        path: "apps",
       },
       destination: {
         server: "https://kubernetes.default.svc",
-        namespace: "your-app-namespace",
+        namespace: "argocd",
       },
       syncPolicy: {
         automated: {
@@ -263,7 +263,7 @@ const accessTokenSecret = new k8s.core.v1.Secret(
   "pulumi-access-token",
   {
     metadata: {
-      namespace: ns.metadata.name,
+      namespace: 'default',
       name: "pulumi-access-token",
     },
     stringData: {
@@ -290,7 +290,7 @@ const crd = new k8s.apiextensions.CustomResource(
           environment: secretStoreEnvironment.split("/")[1],
           accessToken: {
             secretRef: {
-              namespace: accessTokenSecret.metadata.namespace,
+              namespace: 'default',
               name: accessTokenSecret.metadata.name,
               key: "PULUMI_ACCESS_TOKEN",
             },
@@ -336,16 +336,7 @@ const albControllerPolicyDocument = {
         "ec2:DescribeTags",
         "ec2:GetCoipPoolUsage",
         "ec2:DescribeCoipPools",
-        "elasticloadbalancing:DescribeLoadBalancers",
-        "elasticloadbalancing:DescribeLoadBalancerAttributes",
-        "elasticloadbalancing:DescribeListeners",
-        "elasticloadbalancing:DescribeListenerCertificates",
-        "elasticloadbalancing:DescribeSSLPolicies",
-        "elasticloadbalancing:DescribeRules",
-        "elasticloadbalancing:DescribeTargetGroups",
-        "elasticloadbalancing:DescribeTargetGroupAttributes",
-        "elasticloadbalancing:DescribeTargetHealth",
-        "elasticloadbalancing:DescribeTags"
+        "elasticloadbalancing:Describe*"
       ],
       Resource: "*"
     },
