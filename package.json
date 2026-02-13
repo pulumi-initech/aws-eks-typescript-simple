@@ -3,8 +3,9 @@
     "main": "index.ts",
     "scripts": {},
     "dependencies": {
+        "@kubernetes/client-node": "^0.22.0",
         "@pulumi-initech/aws-load-balancer-controller": "file:sdks/pulumi-initech-aws-load-balancer-controller",
-        "@pulumi/aws": "^6.83.2",
+        "@pulumi/aws": "^7.0.0",
         "@pulumi/awsx": "^1.0.6",
         "@pulumi/eks": "^4.2.0",
         "@pulumi/kubernetes": "^4.25.0",

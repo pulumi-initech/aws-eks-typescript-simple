@@ -161,9 +161,35 @@ new ArgoCD("argocd", {
 - Exports `roleArn` for stack outputs
 
 **ArgoCD** (`argocd.ts`):
+
 - Manages namespace, Redis secret, Helm chart, and app-of-apps Application CR
 - Configurable NodePorts and repository settings
 - Optional app-of-apps pattern enabled by default
+
+**PulumiDeploymentRunner** (`components/pulumiDeploymentRunner.ts`):
+
+- Deploys self-managed deployment runners for Pulumi Cloud
+- Based on [customer-managed-workflow-agent](https://github.com/pulumi/customer-managed-workflow-agent/tree/main/kubernetes)
+- Creates namespace, ServiceAccount with RBAC, ConfigMap, Secret, Deployment, Service, and optional ServiceMonitor
+- Configurable pool name, replicas, image, and Fargate settings
+- Supports custom pod templates for node selectors, tolerations, and resource limits
+
+**Usage Example:**
+
+```typescript
+import { PulumiDeploymentRunner } from "./components/pulumiDeploymentRunner";
+
+const deploymentRunner = new PulumiDeploymentRunner("deployment-runner", {
+  namespace: "pulumi-deployments",
+  poolName: "my-deployment-pool",
+  imageName: "pulumi/customer-managed-workflow-agent:latest-amd64",
+  imagePullPolicy: "Always",
+  replicas: 3,
+  accessToken: config.requireSecret("pulumiDeploymentToken"),
+  serviceUrl: "https://api.pulumi.com",
+  enableServiceMonitor: true,
+}, { providers: { kubernetes: kubeProvider }, dependsOn: [cluster] });
+```
 
 ## Exports
 

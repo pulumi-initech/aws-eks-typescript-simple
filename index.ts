@@ -4,6 +4,8 @@ import * as aws from "@pulumi/aws";
 import * as k8s from "@pulumi/kubernetes";
 import * as awsLoadBalancerController from "@pulumi-initech/aws-load-balancer-controller";
 import { ArgoCD } from "./components/argocd";
+import { PulumiDeploymentRunner } from "./components/pulumiDeploymentRunner"
+import { Region } from "@pulumi/aws";
 
 const config = new pulumi.Config();
 
@@ -11,7 +13,8 @@ const name = config.require("clusterName");
 const vpcId = config.require("VpcId");
 
 const awsConfig = new pulumi.Config("aws");
-const region = awsConfig.require("region");
+const region = awsConfig.require<Region>("region");
+const defaultTags = awsConfig.requireObject<any>("defaultTags");
 
 const publicSubnetIds = config.requireObject<string[]>("PublicSubnetIds");
 const privateSubnetIds = config.requireObject<string[]>("PrivateSubnetIds");
@@ -20,6 +23,8 @@ const secretStoreEnvironment = config.require("secretStoreEnvironment");
 const externalSecretsVersion = config.get("externalSecretsVersion") ?? "0.10.4";
 const pkoVersion = config.get("pkoVersion") ?? "v2.2.0";
 const clusterVersion = config.get("clusterVersion") ?? "1.33";
+
+const awsProvider = new aws.Provider("aws", { region: "us-west-2", defaultTags: defaultTags })
 
 const clusterOptions: eks.ClusterOptions = {
   vpcId: vpcId,
@@ -46,7 +51,7 @@ const clusterOptions: eks.ClusterOptions = {
 if (!useFargate) {
   clusterOptions.instanceType = config.require("instanceType");
 }
-const cluster = new eks.Cluster(name, clusterOptions);
+const cluster = new eks.Cluster(name, clusterOptions, { providers: { aws: awsProvider }});
 
 // Create access entries for IAM principals
 const accessEntryArns = config.getObject<string[]>("accessEntryArns") ?? [];
@@ -55,7 +60,8 @@ const accessEntries = accessEntryArns.map((arn, index) => {
     clusterName: cluster.eksCluster.name,
     principalArn: arn,
     type: "STANDARD",
-  }, { dependsOn: [cluster] });
+    tags: defaultTags.tags,
+  }, { dependsOn: [cluster], provider: awsProvider });
 
   new aws.eks.AccessPolicyAssociation(`access-policy-${index}`, {
     clusterName: cluster.eksCluster.name,
@@ -64,7 +70,7 @@ const accessEntries = accessEntryArns.map((arn, index) => {
     accessScope: {
       type: "cluster",
     },
-  }, { dependsOn: [accessEntry] });
+  }, { dependsOn: [accessEntry], provider: awsProvider });
 
   return accessEntry;
 });
@@ -90,7 +96,7 @@ if (useFargate) {
         },
       ],
     }),
-  });
+  }, { provider: awsProvider });
 
   // Attach the AmazonEKSFargatePodExecutionRolePolicy to the role
   const podExecutionRolePolicyAttachment = new aws.iam.RolePolicyAttachment(
@@ -99,7 +105,7 @@ if (useFargate) {
       role: podExecutionRole.name,
       policyArn:
         "arn:aws:iam::aws:policy/AmazonEKSFargatePodExecutionRolePolicy",
-    }
+    }, { provider: awsProvider }
   );
 
   new aws.eks.FargateProfile(
@@ -114,7 +120,7 @@ if (useFargate) {
         },
       ],
     },
-    { dependsOn: [cluster] }
+    { dependsOn: [cluster], provider: awsProvider }
   );
 }
 
@@ -172,6 +178,19 @@ if (config.getBoolean("usePKO")) {
     version: "",
     createNamespace: true,
   }, { provider: kubeProvider, dependsOn: [cluster] });
+}
+
+if (config.getBoolean("useDeploymentRunner")) {
+  const deploymentRunner = new PulumiDeploymentRunner("deployment-runner", {
+    namespace: "pulumi-deployments",
+    poolName: config.get("deploymentRunnerPool") || "default",
+    imageName: "pulumi/customer-managed-workflow-agent:latest-amd64",
+    imagePullPolicy: "IfNotPresent",
+    replicas: 3,
+    accessToken: config.requireSecret("pulumiDeploymentToken"),
+    serviceUrl: "https://api.pulumi.com",
+    enableServiceMonitor: false,
+  }, { providers: { kubernetes: kubeProvider }, dependsOn: [cluster] });
 }
 
 // Create a Kubernetes namespace

@@ -1,15 +1,6 @@
 environment:
   - aws-eks-typescript-simple/dev
 config:
-  usePrometheus: "false"
-  usePKO: "true"
-  useFlux: "false"
-  useArgoCD: "true"
-  useAutoMode: "true"
-  clusterName: jconnell-dev
-  clusterVersion: "1.35"
-  accessEntryArns:
-    - arn:aws:iam::052848974346:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AdministratorAccess_5b5d58a7c435da2d
   aws:region: us-west-2
   aws:defaultTags:
     tags:
@@ -17,6 +8,18 @@ config:
       Team: "Solutions Engineering"
       BusinessUnit: "Customer Success"
       Environment: "development"
-      Project: "aws-eks-typescript-simple"  
+      Project: "aws-eks-typescript-simple"
       ManagedBy: "Pulumi"
       Owner: jconnell@pulumi.com
+  aws-eks-typescript-simple:accessEntryArns:
+    - arn:aws:iam::052848974346:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AdministratorAccess_5b5d58a7c435da2d
+  aws-eks-typescript-simple:clusterName: jconnell-dev
+  aws-eks-typescript-simple:clusterVersion: "1.35"
+  aws-eks-typescript-simple:pulumiDeploymentToken:
+    secure: AAABALSWsvX9vLPb/WqlpDH4UvoOcGrrDH/kX+IfQhiqO1YeJZqYA140o0sOcdjjrmjTaQU8YLHbPZnvv7cuUIk4V2SDJyE6nd8A/A==
+  aws-eks-typescript-simple:useArgoCD: "true"
+  aws-eks-typescript-simple:useAutoMode: "true"
+  aws-eks-typescript-simple:useDeploymentRunner: true
+  aws-eks-typescript-simple:useFlux: "false"
+  aws-eks-typescript-simple:usePKO: "true"
+  aws-eks-typescript-simple:usePrometheus: "false"
