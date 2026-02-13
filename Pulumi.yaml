@@ -1,3 +1,5 @@
 name: aws-eks-typescript-simple
 runtime: nodejs
 description: A basic EKS cluster
+packages:
+  aws-load-balancer-controller: github.com/pulumi-initech/aws-load-balancer-controller@1.0.3
