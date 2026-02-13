@@ -105,6 +105,66 @@ When ArgoCD is enabled, an Application CRD is created (lines 197-222) that:
 - Auto-syncs with prune and self-heal enabled
 - Deploys to argocd namespace
 
+## Component Resources
+
+This project uses custom Pulumi ComponentResources to encapsulate complex infrastructure patterns. Component resources follow these best practices:
+
+### Creating Component Resources
+
+**Provider Inheritance Pattern:**
+- Component resource arguments should NOT include explicit provider parameters (e.g., `kubeProvider`)
+- Child resources within the component should use `{ parent: this }` in their resource options
+- The provider is passed when instantiating the component using the `providers` map in `ComponentResourceOptions`
+
+**Example:**
+```typescript
+// Component definition (argocd.ts)
+export interface ArgoCDArgs {
+  namespace?: string;
+  chartVersion?: string;
+  // NO kubeProvider parameter
+}
+
+export class ArgoCD extends pulumi.ComponentResource {
+  constructor(name: string, args: ArgoCDArgs, opts?: pulumi.ComponentResourceOptions) {
+    super("custom:k8s:ArgoCD", name, {}, opts);
+
+    // Child resources use parent for provider inheritance
+    this.namespace = new k8s.core.v1.Namespace(
+      `${name}-namespace`,
+      { metadata: { name: namespace } },
+      { parent: this }  // Provider inherited from component
+    );
+  }
+}
+
+// Usage in index.ts
+new ArgoCD("argocd", {
+  chartVersion: "7.7.12",
+}, {
+  providers: { kubernetes: kubeProvider },  // Provider passed here
+  dependsOn: [cluster]
+});
+```
+
+**Benefits:**
+- Reduces coupling between components and provider instances
+- Follows Pulumi's idiomatic pattern for component resources
+- Enables automatic provider inheritance to all child resources
+- Makes components more reusable across different contexts
+
+### Existing Component Resources
+
+**AwsLoadBalancerController** (`awsLoadBalancerController.ts`):
+- Encapsulates IAM policy, role, service account, and Helm chart
+- Handles OIDC trust relationship for IRSA pattern
+- Exports `roleArn` for stack outputs
+
+**ArgoCD** (`argocd.ts`):
+- Manages namespace, Redis secret, Helm chart, and app-of-apps Application CR
+- Configurable NodePorts and repository settings
+- Optional app-of-apps pattern enabled by default
+
 ## Exports
 
 Key outputs exported for consumption by other stacks or CLI:

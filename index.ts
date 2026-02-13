@@ -2,7 +2,8 @@ import * as pulumi from "@pulumi/pulumi";
 import * as eks from "@pulumi/eks";
 import * as aws from "@pulumi/aws";
 import * as k8s from "@pulumi/kubernetes";
-import * as random from "@pulumi/random";
+import * as awsLoadBalancerController from "@pulumi-initech/aws-load-balancer-controller";
+import { ArgoCD } from "./components/argocd";
 
 const config = new pulumi.Config();
 
@@ -18,7 +19,7 @@ const useFargate = config.getBoolean("useFargate") ?? false;
 const secretStoreEnvironment = config.require("secretStoreEnvironment");
 const externalSecretsVersion = config.get("externalSecretsVersion") ?? "0.10.4";
 const pkoVersion = config.get("pkoVersion") ?? "v2.2.0";
-const clusterVersion = config.get("clusterVersion") ?? "1.31";
+const clusterVersion = config.get("clusterVersion") ?? "1.33";
 
 const clusterOptions: eks.ClusterOptions = {
   vpcId: vpcId,
@@ -29,12 +30,12 @@ const clusterOptions: eks.ClusterOptions = {
   fargate: useFargate,
   corednsAddonOptions: { enabled: true }, 
   autoMode: {
-    enabled: true,
+    enabled: config.require("useAutoMode") === "true",
     createNodeRole: true,
   },
   maxSize: 6,
-  desiredCapacity: 4,
-  minSize: 4,
+  desiredCapacity: 2,
+  minSize: 2,
   authenticationMode: "API_AND_CONFIG_MAP",
   instanceType: "m3.medium",
   tags: {
@@ -46,6 +47,27 @@ if (!useFargate) {
   clusterOptions.instanceType = config.require("instanceType");
 }
 const cluster = new eks.Cluster(name, clusterOptions);
+
+// Create access entries for IAM principals
+const accessEntryArns = config.getObject<string[]>("accessEntryArns") ?? [];
+const accessEntries = accessEntryArns.map((arn, index) => {
+  const accessEntry = new aws.eks.AccessEntry(`access-entry-${index}`, {
+    clusterName: cluster.eksCluster.name,
+    principalArn: arn,
+    type: "STANDARD",
+  }, { dependsOn: [cluster] });
+
+  new aws.eks.AccessPolicyAssociation(`access-policy-${index}`, {
+    clusterName: cluster.eksCluster.name,
+    principalArn: arn,
+    policyArn: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy",
+    accessScope: {
+      type: "cluster",
+    },
+  }, { dependsOn: [accessEntry] });
+
+  return accessEntry;
+});
 
 if (useFargate) {
   const podExecutionRole = new aws.iam.Role("podExecutionRole", {
@@ -101,16 +123,7 @@ const kubeProvider = new k8s.Provider("kube", {
   kubeconfig: cluster.kubeconfig,
 });
 
-// Create a Kubernetes namespace
-const ns = new k8s.core.v1.Namespace(
-  "external-secrets",
-  {
-    metadata: {
-      name: "external-secrets",
-    },
-  },
-  { provider: kubeProvider, dependsOn: [cluster] }
-);
+
 
 if (config.getBoolean("usePrometheus")) {
   const promOperator = new k8s.helm.v3.Release("prom-operator", {
@@ -148,101 +161,29 @@ if (config.getBoolean("useFlux")) {
 
 if (config.getBoolean("useArgoCD")) {
   const argoChartVersion = config.get("argoChartVersion") || "7.7.12";
-
-  const argocdns = new k8s.core.v1.Namespace(
-    "argocd",
-    { metadata: { name: "argocd" } },
-    { provider: kubeProvider, dependsOn: [cluster] }
-  );
-
-  const redisPasswordResource = new random.RandomPassword("redis-password", {length: 16});
-  const redisSecret = new k8s.core.v1.Secret("redis-secret", {
-      metadata: {
-          name: "argocd-redis",
-          namespace: argocdns.metadata.name,
-      },
-      type: "Opaque",
-      stringData: {
-          auth: redisPasswordResource.result,
-      },
-  }, { provider: kubeProvider, dependsOn: [argocdns] });
-
-  const argocd = new k8s.helm.v4.Chart(
-    "argocd",
-    {
-      namespace: argocdns.metadata.name,
-      chart: "argo-cd",
-      repositoryOpts: {
-        repo: "https://argoproj.github.io/argo-helm",
-      },
-      version: argoChartVersion,
-      values: {
-        fullNameOverride: "",
-        installCRDs: true,
-        createClusterRoles: true,
-        createAggregateRoles: true,
-        createNamespace: true,
-        server: {
-          service: {
-            type: "NodePort",
-            nodePortHttp: 30081, // Use a different port to avoid conflict
-            nodePortHttps: 30444, // Use a different HTTPS port to avoid conflict
-          },
-        },
-      },
-    },
-    { provider: kubeProvider }
-  );
-
-  const appOfapps = new k8s.apiextensions.CustomResource("argocd-application", {
-    apiVersion: "argoproj.io/v1alpha1",
-    kind: "Application",
-    metadata: {
-      name: "pulumi-argocd-apps",
-      namespace: "argocd",
-    },
-    spec: {
-      project: "default",
-      source: {
-        repoURL: "https://github.com/pulumi-initech/pulumi-argocd-apps.git",
-        targetRevision: "HEAD",
-        path: "apps",
-      },
-      destination: {
-        server: "https://kubernetes.default.svc",
-        namespace: "argocd",
-      },
-      syncPolicy: {
-        automated: {
-          prune: true,
-          selfHeal: true,
-        },
-      },
-    },
-  }, { provider: kubeProvider, dependsOn: [argocd] });
+  new ArgoCD("argocd", {
+    chartVersion: argoChartVersion,
+  }, { providers: { kubernetes: kubeProvider }, dependsOn: [cluster] });
 }
 
 if (config.getBoolean("usePKO")) {
-  const pkons = new k8s.core.v1.Namespace(
-    "pulumi-kubernetes-operator",
-    { metadata: { name: "pulumi-kubernetes-operator" } },
-    { provider: kubeProvider, dependsOn: [cluster] }
-  );
-
-  const pko = new k8s.kustomize.Directory(
-    "pulumi-kubernetes-operator",
-    {
-      directory: `https://github.com/pulumi/pulumi-kubernetes-operator//operator/config/default/?ref=${pkoVersion}`,
-    },
-    { provider: kubeProvider }
-  );
-
-  // const pko = new k8s.helm.v4.Chart("pulumi-kubernetes-operator", {
-  //   namespace: pkons.metadata.name,
-  //   chart: "oci://ghcr.io/pulumi/helm-charts/pulumi-kubernetes-operator",
-  //   version: "2.0.0-beta.3"
-  // }, { provider: kubeProvider});
+  const pko = new k8s.helm.v3.Release("pulumi-kubernetes-operator", {
+    chart: "oci://ghcr.io/pulumi/helm-charts/pulumi-kubernetes-operator",
+    version: "",
+    createNamespace: true,
+  }, { provider: kubeProvider, dependsOn: [cluster] });
 }
+
+// Create a Kubernetes namespace
+const ns = new k8s.core.v1.Namespace(
+  "external-secrets",
+  {
+    metadata: {
+      name: "external-secrets",
+    },
+  },
+  { provider: kubeProvider, dependsOn: [cluster] }
+);
 
 // // Deploy a Helm release into the namespace
 const externalSecrets = new k8s.helm.v4.Chart(
@@ -302,309 +243,34 @@ const crd = new k8s.apiextensions.CustomResource(
   { provider: kubeProvider, dependsOn: [externalSecrets, cluster] }
 );
 
-// AWS Load Balancer Controller setup
-const albControllerNamespace = "kube-system";
-const albServiceAccountName = "aws-load-balancer-controller";
+if(config.require("useAutoMode") === "true") {
 
-// IAM policy for AWS Load Balancer Controller
-const albControllerPolicyDocument = {
-  Version: "2012-10-17",
-  Statement: [
-    {
-      Effect: "Allow",
-      Action: ["iam:CreateServiceLinkedRole"],
-      Resource: "*",
-      Condition: {
-        StringEquals: {
-          "iam:AWSServiceName": "elasticloadbalancing.amazonaws.com"
-        }
-      }
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "ec2:DescribeAccountAttributes",
-        "ec2:DescribeAddresses",
-        "ec2:DescribeAvailabilityZones",
-        "ec2:DescribeInternetGateways",
-        "ec2:DescribeVpcs",
-        "ec2:DescribeVpcPeeringConnections",
-        "ec2:DescribeSubnets",
-        "ec2:DescribeSecurityGroups",
-        "ec2:DescribeInstances",
-        "ec2:DescribeNetworkInterfaces",
-        "ec2:DescribeTags",
-        "ec2:GetCoipPoolUsage",
-        "ec2:DescribeCoipPools",
-        "elasticloadbalancing:Describe*"
-      ],
-      Resource: "*"
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "cognito-idp:DescribeUserPoolClient",
-        "acm:ListCertificates",
-        "acm:DescribeCertificate",
-        "iam:ListServerCertificates",
-        "iam:GetServerCertificate",
-        "waf-regional:GetWebACL",
-        "waf-regional:GetWebACLForResource",
-        "waf-regional:AssociateWebACL",
-        "waf-regional:DisassociateWebACL",
-        "wafv2:GetWebACL",
-        "wafv2:GetWebACLForResource",
-        "wafv2:AssociateWebACL",
-        "wafv2:DisassociateWebACL",
-        "shield:GetSubscriptionState",
-        "shield:DescribeProtection",
-        "shield:CreateProtection",
-        "shield:DeleteProtection"
-      ],
-      Resource: "*"
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "ec2:AuthorizeSecurityGroupIngress",
-        "ec2:RevokeSecurityGroupIngress"
-      ],
-      Resource: "*"
-    },
-    {
-      Effect: "Allow",
-      Action: ["ec2:CreateSecurityGroup"],
-      Resource: "*"
-    },
-    {
-      Effect: "Allow",
-      Action: ["ec2:CreateTags"],
-      Resource: "arn:aws:ec2:*:*:security-group/*",
-      Condition: {
-        StringEquals: {
-          "ec2:CreateAction": "CreateSecurityGroup"
-        },
-        Null: {
-          "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
-        }
-      }
-    },
-    {
-      Effect: "Allow",
-      Action: ["ec2:CreateTags", "ec2:DeleteTags"],
-      Resource: "arn:aws:ec2:*:*:security-group/*",
-      Condition: {
-        Null: {
-          "aws:RequestTag/elbv2.k8s.aws/cluster": "true",
-          "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
-        }
-      }
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "ec2:AuthorizeSecurityGroupIngress",
-        "ec2:RevokeSecurityGroupIngress",
-        "ec2:DeleteSecurityGroup"
-      ],
-      Resource: "*",
-      Condition: {
-        Null: {
-          "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
-        }
-      }
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "elasticloadbalancing:CreateLoadBalancer",
-        "elasticloadbalancing:CreateTargetGroup"
-      ],
-      Resource: "*",
-      Condition: {
-        Null: {
-          "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
-        }
-      }
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "elasticloadbalancing:CreateListener",
-        "elasticloadbalancing:DeleteListener",
-        "elasticloadbalancing:CreateRule",
-        "elasticloadbalancing:DeleteRule"
-      ],
-      Resource: "*"
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "elasticloadbalancing:AddTags",
-        "elasticloadbalancing:RemoveTags"
-      ],
-      Resource: [
-        "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*",
-        "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*",
-        "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*"
-      ],
-      Condition: {
-        Null: {
-          "aws:RequestTag/elbv2.k8s.aws/cluster": "true",
-          "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
-        }
-      }
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "elasticloadbalancing:AddTags",
-        "elasticloadbalancing:RemoveTags"
-      ],
-      Resource: [
-        "arn:aws:elasticloadbalancing:*:*:listener/net/*/*/*",
-        "arn:aws:elasticloadbalancing:*:*:listener/app/*/*/*",
-        "arn:aws:elasticloadbalancing:*:*:listener-rule/net/*/*/*",
-        "arn:aws:elasticloadbalancing:*:*:listener-rule/app/*/*/*"
-      ]
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "elasticloadbalancing:ModifyLoadBalancerAttributes",
-        "elasticloadbalancing:SetIpAddressType",
-        "elasticloadbalancing:SetSecurityGroups",
-        "elasticloadbalancing:SetSubnets",
-        "elasticloadbalancing:DeleteLoadBalancer",
-        "elasticloadbalancing:ModifyTargetGroup",
-        "elasticloadbalancing:ModifyTargetGroupAttributes",
-        "elasticloadbalancing:DeleteTargetGroup"
-      ],
-      Resource: "*",
-      Condition: {
-        Null: {
-          "aws:ResourceTag/elbv2.k8s.aws/cluster": "false"
-        }
-      }
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "elasticloadbalancing:AddTags"
-      ],
-      Resource: [
-        "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*",
-        "arn:aws:elasticloadbalancing:*:*:loadbalancer/net/*/*",
-        "arn:aws:elasticloadbalancing:*:*:loadbalancer/app/*/*"
-      ],
-      Condition: {
-        StringEquals: {
-          "elasticloadbalancing:CreateAction": [
-            "CreateTargetGroup",
-            "CreateLoadBalancer"
-          ]
-        },
-        Null: {
-          "aws:RequestTag/elbv2.k8s.aws/cluster": "false"
-        }
-      }
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "elasticloadbalancing:RegisterTargets",
-        "elasticloadbalancing:DeregisterTargets"
-      ],
-      Resource: "arn:aws:elasticloadbalancing:*:*:targetgroup/*/*"
-    },
-    {
-      Effect: "Allow",
-      Action: [
-        "elasticloadbalancing:SetWebAcl",
-        "elasticloadbalancing:ModifyListener",
-        "elasticloadbalancing:AddListenerCertificates",
-        "elasticloadbalancing:RemoveListenerCertificates",
-        "elasticloadbalancing:ModifyRule"
-      ],
-      Resource: "*"
-    }
-  ]
-};
+  // EKS Auto Mode includes AWS Load Balancer Controller by default
+  // For EKS 1.33+, we only need to create an IngressClass resource
+  // The controller is managed by AWS and will handle the ingress resources
 
-// Create IAM policy for AWS Load Balancer Controller
-const albControllerPolicy = new aws.iam.Policy("aws-load-balancer-controller-policy", {
-  policy: JSON.stringify(albControllerPolicyDocument),
-  description: "IAM policy for AWS Load Balancer Controller",
-});
-
-// Create IAM role for AWS Load Balancer Controller with OIDC trust policy
-const albControllerRole = new aws.iam.Role("aws-load-balancer-controller-role", {
-  assumeRolePolicy: pulumi.all([
-    cluster.core.oidcProvider?.arn,
-    cluster.core.oidcProvider?.url
-  ]).apply(([oidcArn, oidcUrl]) => JSON.stringify({
-    Version: "2012-10-17",
-    Statement: [
-      {
-        Effect: "Allow",
-        Principal: {
-          Federated: oidcArn
-        },
-        Action: "sts:AssumeRoleWithWebIdentity",
-        Condition: {
-          StringEquals: {
-            [`${oidcUrl?.replace("https://", "")}:sub`]: `system:serviceaccount:${albControllerNamespace}:${albServiceAccountName}`,
-            [`${oidcUrl?.replace("https://", "")}:aud`]: "sts.amazonaws.com"
-          }
-        }
-      }
-    ]
-  })),
-  description: "IAM role for AWS Load Balancer Controller",
-});
-
-// Attach policy to role
-const albControllerRolePolicyAttachment = new aws.iam.RolePolicyAttachment("aws-load-balancer-controller-policy-attachment", {
-  role: albControllerRole.name,
-  policyArn: albControllerPolicy.arn,
-});
-
-// Create service account for AWS Load Balancer Controller
-const albControllerServiceAccount = new k8s.core.v1.ServiceAccount("aws-load-balancer-controller-sa", {
-  metadata: {
-    name: albServiceAccountName,
-    namespace: albControllerNamespace,
-    annotations: {
-      "eks.amazonaws.com/role-arn": albControllerRole.arn,
+  const ingressClass = new k8s.networking.v1.IngressClass("alb-ingress-class", {
+    metadata: {
+      name: "alb",
+      annotations: {
+        "ingressclass.kubernetes.io/is-default-class": "true",
+      },
     },
-  },
-}, { provider: kubeProvider, dependsOn: [cluster] });
+    spec: {
+      controller: "ingress.k8s.aws/alb",
+    },
+  }, { provider: kubeProvider, dependsOn: [cluster] });
 
-// Deploy AWS Load Balancer Controller using Helm
-const albController = new k8s.helm.v4.Chart("aws-load-balancer-controller", {
-  chart: "aws-load-balancer-controller",
-  version: "1.11.0", // Latest stable version
-  namespace: albControllerNamespace,
-  repositoryOpts: {
-    repo: "https://aws.github.io/eks-charts",
-  },
-  values: {
+} else {
+  // // AWS Load Balancer Controller setup
+  const albController = new awsLoadBalancerController.AwsLoadBalancerController("load-balancer-controller", {
     clusterName: cluster.eksCluster.name,
-    serviceAccount: {
-      create: false,
-      name: albServiceAccountName,
-    },
+    clusterOidcProviderArn: cluster.core.oidcProvider!.arn,
+    clusterOidcProviderUrl: cluster.core.oidcProvider!.url,
+    clusterVpcId: cluster.eksCluster.vpcConfig.vpcId,
     region: region,
-    vpcId: cluster.core.vpcId,
-    podLabels: {
-      app: "aws-load-balancer-controller",
-      cluster: name,
-    },
-  },
-}, { 
-  provider: kubeProvider, 
-  dependsOn: [cluster, albControllerServiceAccount, albControllerRolePolicyAttachment] 
-});
+  }, { providers: { kubernetes: kubeProvider }, dependsOn: [cluster]});
+}
 
 export const kubeconfig = cluster.kubeconfigJson;
 export const clusterOidcProvider = cluster.core.oidcProvider?.url;
@@ -612,4 +278,3 @@ export const clusterOidcProviderArn = cluster.core.oidcProvider?.arn;
 export const clusterIdentifier = cluster.eksCluster.id;
 export const clusterName = cluster.eksCluster.name;
 export const clusterSecretStoreRef = { kind: crd.kind, metadata: { name: crd.metadata.name, namespace: crd.metadata.namespace }};
-export const albControllerRoleArn = albControllerRole.arn;

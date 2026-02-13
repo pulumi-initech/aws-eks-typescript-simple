@@ -5,5 +5,18 @@ config:
   usePKO: "true"
   useFlux: "false"
   useArgoCD: "true"
+  useAutoMode: "true"
   clusterName: jconnell-dev
+  clusterVersion: "1.35"
+  accessEntryArns:
+    - arn:aws:iam::052848974346:role/aws-reserved/sso.amazonaws.com/us-west-2/AWSReservedSSO_AdministratorAccess_5b5d58a7c435da2d
   aws:region: us-west-2
+  aws:defaultTags:
+    tags:
+      Compliance: "HITRUST"
+      Team: "Solutions Engineering"
+      BusinessUnit: "Customer Success"
+      Environment: "development"
+      Project: "aws-eks-typescript-simple"  
+      ManagedBy: "Pulumi"
+      Owner: jconnell@pulumi.com
