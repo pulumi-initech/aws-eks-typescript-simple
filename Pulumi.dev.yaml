@@ -19,7 +19,8 @@ config:
     secure: AAABALSWsvX9vLPb/WqlpDH4UvoOcGrrDH/kX+IfQhiqO1YeJZqYA140o0sOcdjjrmjTaQU8YLHbPZnvv7cuUIk4V2SDJyE6nd8A/A==
   aws-eks-typescript-simple:useArgoCD: "true"
   aws-eks-typescript-simple:useAutoMode: "true"
-  aws-eks-typescript-simple:useDeploymentRunner: true
+  aws-eks-typescript-simple:useDeploymentRunner: "true"
   aws-eks-typescript-simple:useFlux: "false"
   aws-eks-typescript-simple:usePKO: "true"
   aws-eks-typescript-simple:usePrometheus: "false"
+  aws-eks-typescript-simple:enableAppOfApps: "true"

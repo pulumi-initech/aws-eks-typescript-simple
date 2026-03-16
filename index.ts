@@ -53,6 +53,7 @@ if (!useFargate) {
 }
 const cluster = new eks.Cluster(name, clusterOptions, { providers: { aws: awsProvider }});
 
+
 // Create access entries for IAM principals
 const accessEntryArns = config.getObject<string[]>("accessEntryArns") ?? [];
 const accessEntries = accessEntryArns.map((arn, index) => {
@@ -169,13 +170,14 @@ if (config.getBoolean("useArgoCD")) {
   const argoChartVersion = config.get("argoChartVersion") || "7.7.12";
   new ArgoCD("argocd", {
     chartVersion: argoChartVersion,
+    enableAppOfApps: config.getBoolean("enableAppOfApps")
   }, { providers: { kubernetes: kubeProvider }, dependsOn: [cluster] });
 }
 
 if (config.getBoolean("usePKO")) {
   const pko = new k8s.helm.v3.Release("pulumi-kubernetes-operator", {
     chart: "oci://ghcr.io/pulumi/helm-charts/pulumi-kubernetes-operator",
-    version: "",
+    version: "2.4.1",
     createNamespace: true,
   }, { provider: kubeProvider, dependsOn: [cluster] });
 }
@@ -186,7 +188,8 @@ if (config.getBoolean("useDeploymentRunner")) {
     poolName: config.get("deploymentRunnerPool") || "default",
     imageName: "pulumi/customer-managed-workflow-agent:latest-amd64",
     imagePullPolicy: "IfNotPresent",
-    replicas: 3,
+    replicas: 1,
+    agentMemQuantity: 2,
     accessToken: config.requireSecret("pulumiDeploymentToken"),
     serviceUrl: "https://api.pulumi.com",
     enableServiceMonitor: false,
@@ -276,7 +279,7 @@ if(config.require("useAutoMode") === "true") {
       },
     },
     spec: {
-      controller: "ingress.k8s.aws/alb",
+      controller: "eks.amazonaws.com/alb",
     },
   }, { provider: kubeProvider, dependsOn: [cluster] });
 
