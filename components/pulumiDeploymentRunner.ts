@@ -1,5 +1,6 @@
 import * as pulumi from "@pulumi/pulumi";
 import * as k8s from "@pulumi/kubernetes";
+import { V1Pod } from "@kubernetes/client-node";
 
 /**
  * Arguments for the PulumiDeploymentRunner component.
@@ -48,12 +49,6 @@ export interface PulumiDeploymentRunnerArgs {
     serviceUrl?: pulumi.Input<string>;
 
     /**
-     * Optional service account for worker pods.
-     * If not provided, a default service account will be used.
-     */
-    workerServiceAccountName?: pulumi.Input<string>;
-
-    /**
      * Additional environment variables to pass to the deployment runner.
      */
     envVars?: k8s.types.input.core.v1.EnvVar[];
@@ -69,14 +64,6 @@ export interface PulumiDeploymentRunnerArgs {
      * Only applicable when running on AWS EKS Fargate.
      */
     agentMemQuantity?: pulumi.Input<number>;
-
-    /**
-     * Custom pod template for worker pods.
-     * Allows customization of node selectors, tolerations, resource limits, etc.
-     * Uses Kubernetes Strategic Merge Patch semantics.
-     * Can be a plain object or loaded from YAML/JSON.
-     */
-    podTemplate?: any;
 
     /**
      * Enable Prometheus ServiceMonitor for metrics collection.
@@ -133,7 +120,25 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
             { parent: this }
         );
 
+        
+        const podTemplate: V1Pod = {
+            metadata: {
+            },
+            spec: {
+                // Main container configuration
+                automountServiceAccountToken: true,
+                dnsPolicy: "ClusterFirst",
+                containers: [
+                    {
+                        name: "pulumi-workflow",
+                    },
+                ],
+            },
+        };
+
         // Create ConfigMap for agent configuration
+        // Note: The pod template is passed as-is. The agent will apply it and add the service account
+        // via the PULUMI_AGENT_SERVICE_ACCOUNT_NAME environment variable
         const agentConfig = new k8s.core.v1.ConfigMap(
             `${name}-config`,
             {
@@ -146,7 +151,7 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
                     "PULUMI_AGENT_SERVICE_URL": pulumi.output(serviceUrl),
                     "PULUMI_AGENT_IMAGE": args.imageName,
                     "PULUMI_AGENT_IMAGE_PULL_POLICY": pulumi.output(imagePullPolicy),
-                    "worker-pod.json": JSON.stringify(args.podTemplate ?? {}, null, 2),
+                    "worker-pod.json": JSON.stringify(podTemplate ?? {}, null, 2),
                 },
             },
             { parent: this }
@@ -168,7 +173,8 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
             { parent: this }
         );
 
-        // Create ServiceAccount for the agent
+
+        // Create ServiceAccount for the agent first
         this.agentServiceAccount = new k8s.core.v1.ServiceAccount(
             `${name}-sa`,
             {
@@ -182,6 +188,7 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
         );
 
         // Create Role with required permissions
+        // The agent needs to manage pods, access logs, and handle configmaps in its namespace
         this.agentRole = new k8s.rbac.v1.Role(
             `${name}-role`,
             {
@@ -193,14 +200,20 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
                 rules: [
                     {
                         apiGroups: [""],
-                        resources: ["pods", "pods/log", "configmaps"],
-                        verbs: ["create", "get", "list", "watch", "update", "delete"],
+                        resources: ["pods", "pods/log", "configmaps", "secrets"],
+                        verbs: ["create", "get", "list", "watch", "update", "delete", "patch"],
+                    },
+                    {
+                        apiGroups: [""],
+                        resources: ["pods/status"],
+                        verbs: ["get"],
                     },
                 ],
             },
             { parent: this }
         );
 
+        
         // Create RoleBinding
         this.agentRoleBinding = new k8s.rbac.v1.RoleBinding(
             `${name}-rolebinding`,
@@ -226,6 +239,7 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
             { parent: this }
         );
 
+      
         // Build environment variables
         const envVars: k8s.types.input.core.v1.EnvVar[] = [
             {
@@ -235,6 +249,14 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
             {
                 name: "PULUMI_AGENT_SHARED_VOLUME_DIRECTORY",
                 value: "/mnt/work",
+            },
+            {
+                name: "PULUMI_AGENT_NAMESPACE",
+                valueFrom: {
+                    fieldRef: {
+                        fieldPath: "metadata.namespace",
+                    },
+                },
             },
             {
                 name: "PULUMI_AGENT_SERVICE_URL",
@@ -274,13 +296,10 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
             },
         ];
 
-        // Add optional worker service account env var
-        if (args.workerServiceAccountName) {
-            envVars.push({
-                name: "PULUMI_AGENT_SERVICE_ACCOUNT_NAME",
-                value: args.workerServiceAccountName,
-            });
-        }
+        // envVars.push({
+        //     name: "PULUMI_AGENT_SERVICE_ACCOUNT_NAME",
+        //     value: workerServiceAccount.metadata.name
+        // });
 
         // Add optional CPU env var
         if (args.agentNumCpus) {
@@ -303,6 +322,7 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
             envVars.push(...args.envVars);
         }
 
+        
         // Create Deployment
         this.agentDeployment = new k8s.apps.v1.Deployment(
             `${name}-deployment`,
@@ -332,6 +352,9 @@ export class PulumiDeploymentRunner extends pulumi.ComponentResource {
                         },
                         spec: {
                             serviceAccountName: this.agentServiceAccount.metadata.name,
+                            automountServiceAccountToken: true,
+                            dnsPolicy: "ClusterFirst",
+                            restartPolicy: "Always",
                             containers: [
                                 {
                                     name: "agent",

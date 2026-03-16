@@ -66,7 +66,7 @@ export class ArgoCD extends pulumi.ComponentResource {
     const chartVersion = args.chartVersion ?? "7.7.12";
     const nodePortHttp = args.nodePortHttp ?? 30081;
     const nodePortHttps = args.nodePortHttps ?? 30444;
-    const enableAppOfApps = args.enableAppOfApps ?? true;
+    const enableAppOfApps = args.enableAppOfApps ?? false;
     const appOfAppsRepoUrl = args.appOfAppsRepoUrl ?? "https://github.com/pulumi-initech/pulumi-argocd-apps.git";
     const appOfAppsRevision = args.appOfAppsRevision ?? "HEAD";
     const appOfAppsPath = args.appOfAppsPath ?? "apps";
@@ -139,7 +139,7 @@ export class ArgoCD extends pulumi.ComponentResource {
           kind: "Application",
           metadata: {
             name: "pulumi-argocd-apps",
-            namespace: namespace,
+            namespace: this.namespace.metadata.name,
           },
           spec: {
             project: "default",
@@ -150,7 +150,7 @@ export class ArgoCD extends pulumi.ComponentResource {
             },
             destination: {
               server: "https://kubernetes.default.svc",
-              namespace: namespace,
+              namespace: this.namespace.metadata.name,
             },
             syncPolicy: {
               automated: {
